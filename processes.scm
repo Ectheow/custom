@@ -5,6 +5,7 @@
 	    fork-and-exec))
 (use-modules (ice-9 popen)
              (srfi srfi-9)
+	     (srfi srfi-1)
              (srfi srfi-9 gnu))
 
 
@@ -227,7 +228,7 @@ will be executed with for-and-exec."
 	     [reversed-pipe (set-pipeline-subprocs
 			     (set-pipeline-stdout
 			      (car pair)
-			      stdin)
+			      (pipejoint-stdout (cdr pair)))
 			     (reverse
 			      (pipeline-subprocs
 			       (car pair))))])
@@ -238,7 +239,6 @@ will be executed with for-and-exec."
       (let ([pair (add-pipejoint (car list-of-pipejoints)
 				 pipeline
 				 #f stdin #f)])
-	(flush-all-ports)
 	(exec-pipe (car pair)
 		   (cdr list-of-pipejoints)
 		   stdout
@@ -264,58 +264,57 @@ that port or filedesc to it's relevant filedescriptor.
 and return a subprocess record."
   (define (close-if-not-false pipe)
     (if (not (eq? #f pipe)) (close pipe)))
-  (flush-all-ports)
   (let*
-      ;; If given a pipe for stdout, dup it.
-      ((proc-stdout-pipes (if (not (eq? #false stdout)) (cons #f stdout) (pipe)))
-       (proc-stderr-pipes (if (not (eq? #false stderr)) (cons #f stderr) (pipe)))
-       (proc-stdin-pipes  (if (not (eq? #false stdin)) (cons stdin #f) (pipe)))
+      ((proc-stdout-pipes (if (not (eq? #f stdout)) (cons #f stdout) (pipe)))
+       (proc-stderr-pipes (if (not (eq? #f stderr)) (cons #f stderr) (pipe)))
+       (proc-stdin-pipes  (if (not (eq? #f stdin)) (cons stdin #f) (pipe)))
        (close-if-not-false (lambda (pipe)
-                             (if (not (eq? #f pipe)) (close pipe))))
+			     (if (not (eq? #f pipe)) (close pipe))))
        (close-if-not-other-false (lambda (pipe other)
-                                   (if (not (eq? #f other)) (close pipe))))
-       (chld (primitive-fork)))
-    (cond
-      ((eq? chld 0)
-       (begin
-         ;; close all other ports.
-         (port-for-each
-          (lambda (port)
-            (when (and (file-port? port)
-                       (not (or (equal? port (cdr proc-stdout-pipes))
-                                (equal? port (cdr proc-stderr-pipes))
-                                (equal? port (car proc-stdin-pipes)))))
-		(close port))))
-	 ;; to dups on the remaining ports.
-	 (move->fdes (cdr proc-stdout-pipes) STDOUT-FD)
-	 (move->fdes (cdr proc-stderr-pipes) STDERR-FD)
-	 (move->fdes (car proc-stdin-pipes) STDIN-FD)
-         ;; (dup2 (port->fdes (cdr proc-stdout-pipes)) STDOUT-FD)
-         ;; (dup2 (port->fdes (cdr proc-stderr-pipes)) STDERR-FD)
-         ;; (dup2 (port->fdes (car proc-stdin-pipes)) STDIN-FD)
-         ;; close input sides for stdout and stderr, since these are to
-         ;; read from, and the child will be writing to
-         ;; them. vice-versa for stdin.
-         (close-if-not-false (car proc-stdout-pipes)) 
-         (close-if-not-false (car proc-stderr-pipes))
-         (close-if-not-false (cdr proc-stdin-pipes))
-         (apply execlp (cons (car argv) argv))))
-      (else
-       (begin
-         (close-if-not-other-false (cdr proc-stdout-pipes) (car proc-stdout-pipes))
-         (close-if-not-other-false (cdr proc-stderr-pipes) (car proc-stderr-pipes))
-         (close-if-not-other-false (car proc-stdin-pipes) (cdr proc-stdin-pipes))
-         (make-subprocess
-          (cdr proc-stdin-pipes)
-          (car proc-stdout-pipes)
-          (car proc-stderr-pipes)
-          chld))))))
+				   (if (not (eq? #f other)) (close pipe)))))
+    (flush-all-ports)
+    (let ((chld (primitive-fork)))
+      (cond
+       ((eq? chld 0)
+	(begin
+	  ;; close all other ports.
+	  (port-for-each
+	   (lambda (port)
+	     (when (and (file-port? port)
+			(not (or (equal? port (cdr proc-stdout-pipes))
+				 (equal? port (cdr proc-stderr-pipes))
+				 (equal? port (car proc-stdin-pipes)))))
+	       (close port))))
+	  ;; to dups on the remaining ports.
+	  (move->fdes (cdr proc-stdout-pipes) STDOUT-FD)
+	  (move->fdes (cdr proc-stderr-pipes) STDERR-FD)
+	  (move->fdes (car proc-stdin-pipes) STDIN-FD)
+	  ;; (dup2 (port->fdes (cdr proc-stdout-pipes)) STDOUT-FD)
+	  ;; (dup2 (port->fdes (cdr proc-stderr-pipes)) STDERR-FD)
+	  ;; (dup2 (port->fdes (car proc-stdin-pipes)) STDIN-FD)
+	  ;; close input sides for stdout and stderr, since these are to
+	  ;; read from, and the child will be writing to
+	  ;; them. vice-versa for stdin.
+	  (close-if-not-false (car proc-stdout-pipes)) 
+	  (close-if-not-false (car proc-stderr-pipes))
+	  (close-if-not-false (cdr proc-stdin-pipes))
+	  (apply execlp (cons (car argv) argv))))
+       (else
+	(begin
+	  (close-if-not-other-false (cdr proc-stdout-pipes) (car proc-stdout-pipes))
+	  (close-if-not-other-false (cdr proc-stderr-pipes) (car proc-stderr-pipes))
+	  (close-if-not-other-false (car proc-stdin-pipes) (cdr proc-stdin-pipes))
+	  (make-subprocess
+	   (cdr proc-stdin-pipes)
+	   (car proc-stdout-pipes)
+	   (car proc-stderr-pipes)
+	   chld)))))))
 
 (define (wait-for-each-pid list-of-pids)
   (cond
     [(eq? list-of-pids '()) '()]
     [else
      (cons (waitpid (car list-of-pids) 0)
-           (wait-for-each-pid (cdr list-of-pids)))]))
+	   (wait-for-each-pid (cdr list-of-pids)))]))
 (export wait-for-each-pid)
 

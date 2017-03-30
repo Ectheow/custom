@@ -10,7 +10,6 @@
 
 (test-equal "hello"
   (let ([pipeline (exec-pipe '((echo hello) (cat -)) #f #f #f)])
-    (flush-all-ports)
     (read-line (pipeline-stdout pipeline))))
 
 (test-equal "hello"
@@ -19,12 +18,10 @@
 			       (cat -)
 			       (cat -)
 			       (grep .*)) #f #f #f)])
-    (flush-all-ports)
     (read-line (pipeline-stdout pipeline))))
 
 (let ([thepipe (exec-pipe '((cat -) (cat -)) #f #f #f)])
   (display "hello\n" (pipeline-stdin thepipe))
-  (flush-all-ports)
   (close (pipeline-stdin thepipe))
   (test-equal "hello"
     (read-line (pipeline-stdout thepipe)))
@@ -45,7 +42,6 @@
 ;; test input from a file.
 (let ([name&input-port (get-tmpfile-name&port)])
   (display "hello, world\n" (cdr name&input-port))
-  (flush-all-ports)
   (close (cdr name&input-port))
   (let* ([input-file
 	  (open-input-file (car name&input-port))]
@@ -53,17 +49,14 @@
 			      #f input-file #f)])
     (test-equal
 	"hello, world"
-      (begin
-	(flush-all-ports)
-	(read-line (pipeline-stdout pipeline))))
-  (pipeline-close pipeline)))
+      (read-line (pipeline-stdout pipeline)))
+    (pipeline-close pipeline)))
 
 (display "test closed pipe\n")
 ;; test output to a file, input from a file.
 (let ([name&output-port (get-tmpfile-name&port)]
       [name&input-port (get-tmpfile-name&port)])
   (display "hello, world\n" (cdr name&input-port))
-  (flush-all-ports)
   (close (cdr name&input-port))
   (let* ([input-port (open-input-file (car name&input-port))]
 	 [pipeline (exec-pipe '((cat -) (cat -))
