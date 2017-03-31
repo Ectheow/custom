@@ -1,0 +1,52 @@
+%%%% Starting test filesystem-find
+Group begin: filesystem-find
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 19
+  source-form: (test-equal (quote ()) (find-ftw (quote ("one" #())) "." (make-matchfun "two") #f))
+Test end:
+  result-kind: pass
+  actual-value: ()
+  expected-value: ()
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 22
+  source-form: (test-equal (quote ()) (find-ftw (quote ("one" #())) "." (make-matchfun "doodle") #f))
+Test end:
+  result-kind: pass
+  actual-value: ()
+  expected-value: ()
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 25
+  source-form: (test-equal (quote ("./hello" "./hello/cats" "./hello/cats/dogs" "./hello/cats/mice")) (find-ftw (quote ("hello" #() ("cats" #() ("dogs" #()) ("mice" #())))) "." (make-matchfun ".*") #f))
+Test end:
+  result-kind: pass
+  actual-value: ("./hello" "./hello/cats" "./hello/cats/dogs" "./hello/cats/mice")
+  expected-value: ("./hello" "./hello/cats" "./hello/cats/dogs" "./hello/cats/mice")
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 28
+  source-form: (test-equal (quote ("./one/two.txt")) (find-ftw (quote ("one" #() ("two.txt" #()) ("spec2" #()) ("hello" #()) ("three.tyt" #()))) "." (make-matchfun ".*txt$") #f))
+Test end:
+  result-kind: pass
+  actual-value: ("./one/two.txt")
+  expected-value: ("./one/two.txt")
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 38
+  source-form: (test-equal (quote ("./one/two/three.txt")) (find-ftw wholepath-ftw "." (lambda (x y) (begin (format #t "Processing: ~a~%" x) (wholepath-pat x y))) #t))
+Test end:
+  result-kind: pass
+  actual-value: ("./one/two/three.txt")
+  expected-value: ("./one/two/three.txt")
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 46
+  source-form: (test-equal (quote ()) (find-ftw wholepath-ftw "." wholepath-pat #f))
+Test end:
+  result-kind: pass
+  actual-value: ()
+  expected-value: ()
+Group end: filesystem-find
+# of expected passes      8

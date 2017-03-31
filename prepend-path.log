@@ -1,0 +1,20 @@
+%%%% Starting test prepend-path
+Group begin: prepend-path
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 10
+  source-form: (test-equal (quote ()) (prepend-path "cats" (quote ())))
+Test end:
+  result-kind: pass
+  actual-value: ()
+  expected-value: ()
+Test begin:
+  source-file: "custom/filesystem-tests.scm"
+  source-line: 13
+  source-form: (test-equal (quote ("cats/one" "cats/two")) (prepend-path "cats" (quote ("one" "two"))))
+Test end:
+  result-kind: pass
+  actual-value: ("cats/one" "cats/two")
+  expected-value: ("cats/one" "cats/two")
+Group end: prepend-path
+# of expected passes      2

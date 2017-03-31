@@ -1,0 +1,60 @@
+%%%% Starting test basic-scanline
+Group begin: basic-scanline
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 6
+  source-form: (test-equal "hello!" (read-line-before-or-unread (open-input-string "hello!\n") 1))
+Test end:
+  result-kind: pass
+  actual-value: "hello!"
+  expected-value: "hello!"
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 10
+  source-form: (test-equal "hello!" (read-line-before-or-unread (subprocess-stdout (fork-and-exec (quote (sh -c "echo hello!")))) 1))
+Test end:
+  result-kind: pass
+  actual-value: "hello!"
+  expected-value: "hello!"
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 14
+  source-form: (test-equal #f (read-line-before-or-unread (subprocess-stdout (fork-and-exec (quote (sh -c "sleep 2; echo hello!")))) 1))
+Test end:
+  result-kind: pass
+  actual-value: #f
+  expected-value: #f
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 20
+  source-form: (test-equal "hello!" (scan-input-for-line (lambda (x) (equal? x "hello!")) (open-input-string "one\ntwo\nthree\nhello!\nworld")))
+Test end:
+  result-kind: pass
+  actual-value: "hello!"
+  expected-value: "hello!"
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 27
+  source-form: (test-equal #f (scan-input-for-line (lambda (x) (equal? x "hello!")) (open-input-string "one\ntwo\nthree\nfour\nfive\n")))
+Test end:
+  result-kind: pass
+  actual-value: #f
+  expected-value: #f
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 34
+  source-form: (test-equal #f (scan-input-for-line (lambda (x) (equal? x "hello!")) (subprocess-stdout (fork-and-exec (quote (sh -c "sleep 5; echo hello!")))) #:timeout-secs 1))
+Test end:
+  result-kind: pass
+  actual-value: #f
+  expected-value: #f
+Test begin:
+  source-file: "custom/io-tests.scm"
+  source-line: 40
+  source-form: (test-equal "hello!" (scan-input-for-line (lambda (x) (equal? x "hello!")) (subprocess-stdout (fork-and-exec (quote (sh -c "sleep 3; echo hello!")))) #:timeout-secs 4))
+Test end:
+  result-kind: pass
+  actual-value: "hello!"
+  expected-value: "hello!"
+Group end: basic-scanline
+# of expected passes      7
