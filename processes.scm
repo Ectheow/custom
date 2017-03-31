@@ -250,9 +250,33 @@ will be executed with for-and-exec."
 	       stdout stdin stderr))
 (export exec-pipe)
 
+(define *autoreap* #f)
+
+(define (start/stop-autoreap which)
+  "start-autoreap -> boolean
+install a signal handler that responds to SIGCHLD and automatically
+reaps all child processes."
+  (let ([handler (lambda (signum)
+		   (do ()
+		       ((eq? (catch #t
+			       (lambda ()
+				 (waitpid WAIT_ANY WNOHANG))
+			       (lambda (key . args) #t) #t)) #t)))])
+    (case which
+      ((#t)
+       (set! *autoreap* #t)
+       (sigaction SIGCHLD handler))
+      (else
+       (set! *autoreap* #f)
+       (sigaction SIGCHLD SIG_DFL)))))
+(export start/stop-autoreap)
+ 
 (define (pipeline-close pipeline)
-  (wait-for-each-pid
-   (map subprocess-pid (pipeline-subprocs pipeline))))
+  (case *autoreap*
+    ((#t) #f)
+    ((#f)
+     (wait-for-each-pid
+      (map subprocess-pid (pipeline-subprocs pipeline))))))
 (export pipeline-close)
 
 (define (fork-and-exec-strings argv stdout stdin stderr)
@@ -265,14 +289,15 @@ and return a subprocess record."
   (define (close-if-not-false pipe)
     (if (not (eq? #f pipe)) (close pipe)))
   (let*
-      ((param->pipepair (lambda (param dir) (if (not (eq? #f param))
-						(case dir
-						  ((in input)
-						   (cons param #f))
-						  ((out output)
-						   (cons #f param))
-						  (else (throw 'invalid-pipe-direction)))
-						(pipe))))
+      ((param->pipepair (lambda (param dir)
+			  (if (not (eq? #f param))
+			      (case dir
+				((in input)
+				 (cons param #f))
+				((out output)
+				 (cons #f param))
+				(else (throw 'invalid-pipe-direction)))
+			      (pipe))))
        (proc-stdout-pipes (param->pipepair stdout 'out))
        (proc-stderr-pipes (param->pipepair stderr 'out))
        (proc-stdin-pipes  (param->pipepair stdin 'in))
@@ -299,15 +324,19 @@ and return a subprocess record."
 	       (close port))))
 	  ;; to dups on the remaining ports.
 	  (map (lambda (it)
-		 (case (car it)
-		   ((out output)
-		    (move->fdes (cdadr it) (caddr it))
-		    (when (caadr it) (close (caadr it))))
-		   ((in input)
-		    (move->fdes (caadr it) (caddr it))
-		    (when (cdadr it) (close (cdadr it))))
-		   (else (throw 'invalid-pipe-direction))))
-		 pipes-and-fds)
+		 (let ((dir (car it))
+		       (inport (caadr it))
+		       (outport (cdadr it))
+		       (destination-fd (caddr it)))
+		   (case dir
+		     ((out output)
+		      (move->fdes outport destination-fd)
+		      (when inport (close inport)))
+		     ((in input)
+		      (move->fdes inport destination-fd)
+		      (when outport (close outport)))
+		     (else (throw 'invalid-pipe-direction)))))
+	       pipes-and-fds)
 	  ;; (dup2 (port->fdes (cdr proc-stdout-pipes)) STDOUT-FD)
 	  ;; (dup2 (port->fdes (cdr proc-stderr-pipes)) STDERR-FD)
 	  ;; (dup2 (port->fdes (car proc-stdin-pipes)) STDIN-FD)
