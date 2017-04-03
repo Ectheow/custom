@@ -348,6 +348,148 @@ descriptors on the child's side (these will be dupped)."
     (apply execl program program args)]
    [else (apply execlp program program args)]))
 
+;; a subprocess has some number of file descriptors, which may be read
+;; or write descriptors, which we wish to connect to descriptors on
+;; the parent's side. We do this with pipes; typically on the parent
+;; side we don't care what file descriptor specifically we use,
+;; although we may. therefore, we have:
+;; for parent-side reads:
+;; 1. a possible parent file descriptor that maps to
+;; 2. a definite child file descriptor.
+;; questions:
+;; how exactly do we want to communicate with the subprocess -
+;; anonymous ports or filedescriptors? There are any number of ways
+;; that you can communicate with a subprocess over file descriptors, a
+;; flexible approach may be interesting but  what really is the goal?
+;; How do we mean subprocesses to be used, and how are they usually
+;; used? Does a good implementation enable typical use cases, or all
+;; use cases?
+;; there are several possible use-cases for a process:
+;; 1. specific -  open a process and get its stdout into a string
+;; 2. specific - open a process and gt its stdout/stderr into a string
+;; 3. specific - open a process and get its stdout into a port
+;; 4. specific - opena  process and get its stdout, stdin, and stderr
+;; into a port.
+;; 5. nonspecific - open a process, map a series of ports to
+;; filedescriptors, and return the 'other ends' of the new
+;; descriptors. 
+;; 6. nonspecific - open a process, map a series of ports to
+;; filedescriptors, and map their corresponding pipe ends to another
+;; set of filedescriptors on the parent process side.
+;;
+;; we can implement all these from a function that does 5 or 6, and use
+;; wrapper functions for 1-4.
+;; It would be advantageous to have:
+;; 1. call-in-new-process - forks and calls a thunk in a new child process.
+;; 2. portmap - given a set of r/w pipes and additional info, map
+;; these to appropriate file descriptors - to be called after forking
+;; in either a child or parent process.
+;; 3. %exec - basic exec, looks up a path more or less.
+;;
+;; file descriptor mapping
+;; mapped file descriptors can work by duping a descriptor any number
+;; of times. For example, we can map stdout and stderr on the child
+;; side to a single port or file descriptor on the parent side by
+;; duping one file descriptor to 1 and 2.
+;; fork
+;; on parent: for each mapping, close the opposite file descriptor to
+;; the one we want (i.e. if the mapping is for reading on the child,
+;; close the read), and, if a desired fd is specificed, move the port
+;; to that fd - if there are multiple fds that we want to map, dup those.
+;; on child: for each mapping, do the mirror - given the pipe
+;; direction, close the descriptors we don't want, 
+;; this suggests we want several peices of info for each pipe/connection:
+;; - the 'direction' - canonically this should be for the child.
+;; - the set of fds on the parent we want - if the direction is
+;; 'read', that means that we should map the port to one of these fds
+;; on the parent, and dup to all the rest.
+;; - the set of fds on the child we want
+;;
+;; (cons direction (cons list-of-parent-fds (cons list-of-child-fds
+;; 
+;; a map-spec is:
+;; (cons s (cons lon1 (cons lon2 empty)))
+;; where s is a symbol, lon1 and 2 are list-of-numbers.
+;; 
+;; '(read (1 2 3) (0))
+;; would mean that we want the child to read on 0 from the parent, and
+;; that for the parent, all output to 1 2 and 3 ends up going to a
+;; single write fd that is piped to 0 on the child.
+;; '(read () (0))
+;; '(read #nil (0))
+;; '(read #f (0))
+;; would mean we don't care what the parent FD# is, just map it, and
+;; make sure it writes to 0 on the child.
+;; note: this is a single mapping. For multiple mappings, we could:
+;; '((read (1 2) (0)) (write (0) (3)))
+;; for example, or
+;; '((read (1 2) (0)) (write (0) #nil))
+;; since we only call a thunk which has no way of getting ports, we
+;; should problably call it an error to not map any of the child's
+;; descriptors.
+;; generic usecase:
+;; (run '((read #nil (0)) (write #nil (1))) (lambda () (%exec (cat -))))
+;; returns three values, one for the child's read port on the parent, and another
+;; for the child's write port on the parent, and another with the
+;; child's pid. The parent can then use
+;; these ports to communicate with the cat process.
+
+(define (run* maps thunk)
+  (let* ((pipes (map pipe maps))
+	 (%domaps (lambda (pipe maps)
+		    (move->fdes pipe (car maps))
+		    (for-each (lambda (fd) (dup2 pipe fd))
+			      (cdr maps))))
+	 (do-one-map (lambda (pipe fdspec side)
+		       (cond
+			[(eq? 'parent side)
+			 
+
+	 (domaps (lambda (pipes fdspecs side)
+		     (let ((spec-dir (car fdspec))
+			   (r (car pipe))
+			   (w (cdr pipe)))
+		       (cond
+			[(and (eq? parent/child 'parent)
+			      (eq? spec-dir 'read))
+			 (close r)
+			 (when (caddr fdspec) (%domaps w fdspec))]
+			[(and (eq? parent/child 'child)
+			      (eq? spec-dir 'read))
+			 (close w)
+			 (%domaps r fdspec)]
+			[(and (eq? parent/child 'parent)
+			      (eq? spec-dir 'write))
+			 (close w)
+			 (when (caddr fdspec) (%domaps r fdspec))]
+			[(and (eq? parent/child 'child)
+			      (eq? spec-dir 'write))
+			 (close r)
+			 (%domaps w fdspec)])))))
+	 (pid (%fork)))
+    (cond
+     [(zero? pid)
+      ((domaps 'child) pipes maps)]
+     [else
+      ((domaps 'parent) pipes maps)]))
+  
+(define (%open-subprocess thunk
+			  stdin-r/w
+			  stdout-r/w
+			  stderr-r/w)
+  (let ([pid (%fork)])
+    (cond
+     [(not (zero? pid)) ; parent
+      (for-each close-when-port
+		(map cdr (list stderr-r/w stdout-r/w)))
+      (close-when-port (car stdin-r/w))]
+     [else
+      (move->fdes 
+     
+      
+     
+
+
 (define (pipeline-close pipeline)
   "pipeline-close : pipeline -> list-of-cons
 if the module is in autoreap mode, return nil. Otherwise, for each
