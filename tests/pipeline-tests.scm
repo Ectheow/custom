@@ -68,6 +68,40 @@
     (test-equal
 	"hello, world"
       (read-line input-port))))
-
     
 (test-end "pipeline-tests")
+
+(test-begin "mixed-pipeline-thread-tests")
+(let* ([producer (lambda (stdin stdout)
+		  (with-output-to-port
+		      (lambda ()
+		      (display "hello\n")
+		      (display "world\n")
+		      (display "helloworld\n")))
+		  (close stdout)
+		  (close stdin))]
+      [filterer (lambda (stdin stdout)
+		  (let loop ([line (read-line stdin)])
+		    (cond
+		     [(eof-object? line) #t]
+		     [else
+		      (when
+		       (string-match "hello" line)
+			(with-output-to-port stdout
+			  (lambda ()
+			    (display line))))
+		      (loop (read-line stdin))])))]
+      [pipe (exec-pipe
+	     `(,producer
+	       (cat -)
+	       (cat -)
+	       (grep .*)
+	       ,filterer) #f #f #f)])
+      (test-equal
+	  "hello"
+	(read-line (pipeline-stdout pipe)))
+      (test-equal "helloworld"
+	(read-line (pipeline-stdout pipe))))
+
+(test-end "mixed-pipeline-thread-tests")
+

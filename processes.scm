@@ -51,7 +51,7 @@ where stdout, stdin, and stderr are input, output, and input ports,
 and subprocs is a list of <subprocess> structures.
 |#
 (define-immutable-record-type <pipeline>
-  (make-pipeline stdout stdin subprocs)
+  (make-pipeline stdin stdout subprocs)
   pipeline?
   (stdout pipeline-stdout set-pipeline-stdout)
   (stdin pipeline-stdin set-pipeline-stdin)
@@ -62,6 +62,21 @@ and subprocs is a list of <subprocess> structures.
         pipeline-stdin
         pipeline-subprocs)
 
+(define (pipejoint-stdin pipejoint)
+  (cond
+   [(pipe-procedure? pipejoint)
+    (pipe-procedure-stdin pipejoint)]
+   [else
+    (subprocess-stdin pipejoint)]))
+(export pipejoint-stdin)
+
+(define (pipejoint-stdout pipejoint)
+  (cond
+   [(pipe-procedure? pipejoint)
+    (pipe-procedure-stdout pipejoint)]
+   [else (subprocess-stdout pipejoint)]))
+(export pipejoint-stdout)
+
 (define (fork-shexec command)
   " fork-shexec : list-of-strings -> number
 Fork and exec command by passing it to /bin/sh -c as a single joined string"
@@ -70,6 +85,7 @@ Fork and exec command by passing it to /bin/sh -c as a single joined string"
      [(= child 0) (apply execl (list SHELL SHELL "-c" (string-join command " ")))]
      [else child])))
 
+       
 (define (atom->string an-atom)
   (cond
    ((symbol? an-atom)
@@ -92,19 +108,45 @@ Fork and exec command by passing it to /bin/sh -c as a single joined string"
 		     
 
 (define (with-opened-subprocess subproc thunk)
+  "with-opened-subprocess : subprocess thunk -> (values any cons)
+With the subprocess, which has been opened by fork-and-exec, execute
+thunk with the current output and inputports set to the subprocess'
+standard in and standard out, respectively. Returns two values: whatver the thunk
+returned, and the waitpid result. autoreap is temporarily turned off,
+if it's on."
   (let ((old-output-port (current-output-port))
 	(old-input-port (current-input-port)))
-    (set-current-output-port (subprocess-stdin subproc))
-    (set-current-input-port (subprocess-stdout subproc))
-    (let ((ret (thunk)))
+  (dynamic-wind
+    (lambda ()
+      (set-current-output-port (subprocess-stdin subproc))
+      (set-current-input-port (subprocess-stdout subproc)))
+    (lambda ()
+      (values (thunk) (wait (subprocess-pid subproc))))
+    (lambda ()
+      (map (lambda (port)
+	     (close port))
+	   (list (subprocess-stdout subproc)
+		 (subprocess-stderr subproc)
+		 (subprocess-stdin subproc)))
       (set-current-output-port old-output-port)
-      (set-current-input-port old-input-port)
-      (close-input-port (subprocess-stdout subproc))
-      (close-input-port (subprocess-stderr subproc))
-      (close-output-port (subprocess-stdin subproc))
-      (values
-       ret
-       (waitpid (subprocess-pid subproc))))))
+      (set-current-input-port old-input-port)))))
+
+      
+;;   (let ((old-output-port (current-output-port))
+;; 	(old-input-port (current-input-port)))
+;;     (set-current-output-port (subprocess-stdin subproc))
+;;     (set-current-input-port (subprocess-stdout subproc))
+;;     (let ((ret (thunk)))
+;;       (set-current-output-port old-output-port)
+;;       (set-current-input-port old-input-port)
+;;       (close-input-port (subprocess-stdout subproc))
+;;       (close-input-port (subprocess-stderr subproc))
+;;       (close-output-port (subprocess-stdin subproc))
+;;       (values
+;;        ret
+;;        (if (not *autoreap*)
+;; 	   (waitpid (subprocess-pid subproc) 0)
+;; 	   #nil)))))
 (export with-opened-subprocess)
 
 (define* (fork-and-exec argv #:optional [stdout #f] [stdin #f] [stderr #f])
@@ -167,7 +209,7 @@ in port, and save the standard out.
 (define (exec-pipe list-of-pipejoints stdout stdin stderr)
   "exec-pipe : list-of-pipejoints -> pipeline
 Create a pipeline for each argv or procedure in the list, each argv
-will be executed with for-and-exec."
+will be executed with fork-and-exec."
   (define (append-subprocess-to-pipe pipeline argv stdout stdin stderr)
     (let ([subproc (fork-and-exec argv stdout stdin stderr)])
       (cons
@@ -180,7 +222,7 @@ will be executed with for-and-exec."
     (let* ([stdoutpair (if (eq? #f stdout) (pipe) (cons #f stdout))]
            [stdinpair (if (eq? #f stdin) (pipe) (cons stdin #f))]
            [thread (call-with-new-thread
-                    (lambda () (proc (cdr stdoutpair) (car stdinpair))))]
+                    (lambda () (proc (car stdinpair) (cdr stdoutpair))))]
            [pipeproc (make-pipe-procedure (car stdoutpair)
                                           (cdr stdinpair)
                                           #f thread)])
@@ -192,17 +234,6 @@ will be executed with for-and-exec."
          (pipeline-subprocs pipeline)))
        pipeproc)))
 
-  (define (pipejoint-stdin pipejoint)
-    (cond
-      [(pipe-procedure? pipejoint)
-       (pipe-procedure-stdin pipejoint)]
-      [else
-       (subprocess-stdin pipejoint)]))
-  (define (pipejoint-stdout pipejoint)
-    (cond
-     [(pipe-procedure? pipejoint)
-      (pipe-procedure-stdout pipejoint)]
-     [else (subprocess-stdout pipejoint)]))
   
   (define (add-pipejoint pipejoint pipeline stdout stdin stderr)
     (cond
@@ -245,12 +276,13 @@ will be executed with for-and-exec."
 		   (pipejoint-stdout (cdr pair))
 		   stderr))]))
     
-    (exec-pipe (make-pipeline #f stdin '())
+    (exec-pipe (make-pipeline stdin #f '())
 	       list-of-pipejoints
 	       stdout stdin stderr))
 (export exec-pipe)
 
 (define *autoreap* #f)
+(define *reaped* '())
 
 (define (start/stop-autoreap which)
   "start-autoreap -> boolean
@@ -260,8 +292,10 @@ reaps all child processes."
 		   (do ()
 		       ((eq? (catch #t
 			       (lambda ()
-				 (waitpid WAIT_ANY WNOHANG))
-			       (lambda (key . args) #t) #t)) #t)))])
+				 (set! *reaped*
+				   (cons (waitpid WAIT_ANY WNOHANG)
+					 *reaped*)))
+			       (lambda (key . args) #t)) #t) #t)))])
     (case which
       ((#t)
        (set! *autoreap* #t)
@@ -271,12 +305,57 @@ reaps all child processes."
        (sigaction SIGCHLD SIG_DFL)))))
 (export start/stop-autoreap)
  
+(define (%fork)
+  (flush-all-ports)
+  (primitive-fork))
+
+(define (fork/pipe thunk)
+  "fork/pipe : list-of-connsspecs, thunk -> number
+conns is a list-of-connspecs, which is a list of lists of numbers,
+where each list starts with a number which is the file descriptor on
+the parent side that should be getting input from all the other
+descriptors on the child's side (these will be dupped)."
+  (let* ((pipe-r/w (pipe))
+	 (r (car pipe-r/w))
+	 (w (cdr pipe-r/w))
+	 (pid (%fork)))
+    (cond
+     [(not (zero? pid)) ; parent
+      (close w)
+      (move->fdes r STDIN-FD)]
+     [else ; child
+      (close r)
+      (move->fdes w STDOUT-FD)
+      (thunk)])))
+
+(define (pipe* . thunks)
+  (letrec ((piper (lambda (thunks)
+		    (let ((thunk (car thunks))
+			  (thunks (cdr thunks)))
+		      (cond
+		       [(pair? thunks)
+			(begin
+			  (fork/pipe thunk)
+			  (piper thunks))]
+		       [else (thunk)])))))
+    (cond
+     [(pair? thunks) (piper thunks)]
+     [else (error "no thunks passed to pipe*")])))
+		      
+(define (exec program . args)
+  (cond
+   [(string-index program #/)
+    (apply execl program program args)]
+   [else (apply execlp program program args)]))
+
 (define (pipeline-close pipeline)
-  (case *autoreap*
-    ((#t) #f)
-    ((#f)
+  "pipeline-close : pipeline -> list-of-cons
+if the module is in autoreap mode, return nil. Otherwise, for each
+process in the list-of-procs in the pipeline, waitpid for each - this
+will block until each one is finished. It is a no-op returning '()
+when autoreap is on."
      (wait-for-each-pid
-      (map subprocess-pid (pipeline-subprocs pipeline))))))
+      (map subprocess-pid (pipeline-subprocs pipeline))))
 (export pipeline-close)
 
 (define (fork-and-exec-strings argv stdout stdin stderr)
@@ -286,10 +365,10 @@ path for us. If any of stdout stdin or stderr are not false, we dup
 that port or filedesc to it's relevant filedescriptor.
  (apply execlp (cons (car argv) argv))
 and return a subprocess record."
-  (define (close-if-not-false pipe)
-    (if (not (eq? #f pipe)) (close pipe)))
   (let*
-      ((param->pipepair (lambda (param dir)
+      ((close-if-not-false (lambda (pipe)
+			     (if (not (eq? #f pipe)) (close pipe))))
+       (param->pipepair (lambda (param dir)
 			  (if (not (eq? #f param))
 			      (case dir
 				((in input)
@@ -337,15 +416,9 @@ and return a subprocess record."
 		      (when outport (close outport)))
 		     (else (throw 'invalid-pipe-direction)))))
 	       pipes-and-fds)
-	  ;; (dup2 (port->fdes (cdr proc-stdout-pipes)) STDOUT-FD)
-	  ;; (dup2 (port->fdes (cdr proc-stderr-pipes)) STDERR-FD)
-	  ;; (dup2 (port->fdes (car proc-stdin-pipes)) STDIN-FD)
 	  ;; close input sides for stdout and stderr, since these are to
 	  ;; read from, and the child will be writing to
 	  ;; them. vice-versa for stdin.
-	  ;; (close-if-not-false (car proc-stdout-pipes)) 
-	  ;; (close-if-not-false (car proc-stderr-pipes))
-	  ;; (close-if-not-false (cdr proc-stdin-pipes))
 	  (apply execlp (cons (car argv) argv))))
        (else
 	(begin
@@ -366,11 +439,46 @@ and return a subprocess record."
 	   (car proc-stderr-pipes)
 	   chld)))))))
 
+(define (->pid pid/proc)
+  (cond
+   [(subprocess? pid/proc)
+    (subprocess-pid pid/proc)]
+   [(integer? pid/proc) pid/proc]
+   [else (throw '->pid (format #f "~a is not an integer or subprocess" pid/proc))]))
+
+(define (find-reaped-pid pid)
+  (cond
+   [(assq pid *reaped*) =>
+    (lambda (foundpid)
+      (set! *reaped*
+	(filter
+	 (lambda (it)
+	   (not (eqv? it foundpid))) *reaped*)))]
+   [else #f]))
+
+
+(define (wait pid/proc)
+  "wait : pid/proc -> cons or false
+wait for the pid or proc specified. If autoreap is set, we try to find
+this pid in the list of reaped pids. If not, we try a direct call to
+waitpid. If no pid is found either way, we return false. If it is, we
+return the pair waitpid returned."
+  (let ([pid (->pid pid/proc)])
+    (cond
+     [*autoreap*
+      (find-reaped-pid pid)]
+     [else
+      (catch #t
+	(lambda ()
+	  (waitpid pid))
+	(lambda (key . args) #f))])))
+(export wait) 
+
 (define (wait-for-each-pid list-of-pids)
   (cond
     [(eq? list-of-pids '()) '()]
     [else
-     (cons (waitpid (car list-of-pids) 0)
+     (cons (wait (car list-of-pids))
 	   (wait-for-each-pid (cdr list-of-pids)))]))
 (export wait-for-each-pid)
 
