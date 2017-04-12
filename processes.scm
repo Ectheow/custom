@@ -341,12 +341,16 @@ descriptors on the child's side (these will be dupped)."
     (cond
      [(pair? thunks) (piper thunks)]
      [else (error "no thunks passed to pipe*")])))
+(export pipe*)
 		      
 (define (exec program . args)
-  (cond
-   [(string-index program #/)
-    (apply execl program program args)]
-   [else (apply execlp program program args)]))
+  (let ((program-s (atom->string program))
+	(args-s (stringify-list args)))
+    (cond
+     [(string-index program-s #\/)
+      (apply execl program-s program-s args-s)]
+     [else (apply execlp program-s program-s args-s)])))
+(export exec)
 
 ;; a subprocess has some number of file descriptors, which may be read
 ;; or write descriptors, which we wish to connect to descriptors on
@@ -405,11 +409,14 @@ descriptors on the child's side (these will be dupped)."
 ;; on the parent, and dup to all the rest.
 ;; - the set of fds on the child we want
 ;;
-;; (cons direction (cons list-of-parent-fds (cons list-of-child-fds
+;; (cons direction (cons list-of-parent-fds (cons list-of-child-fds nil)))
 ;; 
 ;; a map-spec is:
 ;; (cons s (cons lon1 (cons lon2 empty)))
 ;; where s is a symbol, lon1 and 2 are list-of-numbers.
+;; a map-set is:
+;; 1. '() or 
+;; 2. (cons msp mst) where msp is a map-spec and mst is a map-set.
 ;; 
 ;; '(read (1 2 3) (0))
 ;; would mean that we want the child to read on 0 from the parent, and
@@ -433,61 +440,104 @@ descriptors on the child's side (these will be dupped)."
 ;; for the child's write port on the parent, and another with the
 ;; child's pid. The parent can then use
 ;; these ports to communicate with the cat process.
+;; we get a map-specs and a thunk.
+;; create pipes
+;; fork
+;; for child -
+;;     for each map-spec - 
+;;        if the map-spec has a direction of read, close the write
+;;        pipe. If it has a direction of write, close the read pipe.
+;;        for the first child file descriptor -
+;;            if it DNE, error out.
+;;            if it does exist, move the current pipe to that FD.
+;;        for each child file descriptor after the first-
+;;            dup it to the first.
+;;     call thunk.
+;; for parent -
+;;     for each map-spec - 
+;;         if the map-spec has a direction of read, close the read
+;;         pipe. If it has a direction of write, close the write pipe.
+;;         add the non-closed pipe to the list to return.
+;;         for the first parent file descriptor -
+;;             if it DNE, do nothing - continue, otherwise,
+;;             move it to the appropriate fdes.
+;;         for each parent file descriptor after the first (if extant)-
+;;             dup it to the first.
+;;     return the list of pipes, and the child pid.
 
 (define (run* maps thunk)
-  (let* ((pipes (map pipe maps))
-	 (%domaps (lambda (pipe maps)
-		    (move->fdes pipe (car maps))
-		    (for-each (lambda (fd) (dup2 pipe fd))
-			      (cdr maps))))
-	 (do-one-map (lambda (pipe fdspec side)
-		       (cond
-			[(eq? 'parent side)
-			 
+  (letrec ((pipes (map (lambda (ignore) (pipe)) maps))
+	   (get-proper-pipe/close-other
+	    (lambda (pipepair who dir)
+	      (cond
+	       [(or (and (eq? who 'parent)
+			 (eq? dir 'read))
+		    (and (eq? who 'child)
+			 (eq? dir 'write)))
+		(begin (close (car pipepair))
+		       (cdr pipepair))]
+	       [(or (and (eq? who 'parent)
+			 (eq? dir 'write))
+		    (and (eq? who 'child)
+			 (eq? dir 'read)))
+		(begin (close (cdr pipepair))
+		       (car pipepair))]
+	       [else (error
+		      (format
+		       #f
+		       "invalid direction/who given: ~a ~a~%"
+		       dir
+		       who))])))
+	   (do-dups (lambda (pipe mappings)
+		      "do-dups : pipe, list-of-fds -> pipe
+does actual moving/dups for the given pipe and
+'mappings', where mappings are just a list of numbers."
+		      (if (null? mappings)
+			  pipe
 
-	 (domaps (lambda (pipes fdspecs side)
-		     (let ((spec-dir (car fdspec))
-			   (r (car pipe))
-			   (w (cdr pipe)))
-		       (cond
-			[(and (eq? parent/child 'parent)
-			      (eq? spec-dir 'read))
-			 (close r)
-			 (when (caddr fdspec) (%domaps w fdspec))]
-			[(and (eq? parent/child 'child)
-			      (eq? spec-dir 'read))
-			 (close w)
-			 (%domaps r fdspec)]
-			[(and (eq? parent/child 'parent)
-			      (eq? spec-dir 'write))
-			 (close w)
-			 (when (caddr fdspec) (%domaps r fdspec))]
-			[(and (eq? parent/child 'child)
-			      (eq? spec-dir 'write))
-			 (close r)
-			 (%domaps w fdspec)])))))
-	 (pid (%fork)))
+			  (begin
+			    (move->fdes pipe (car mappings))
+			    (let looprest ((fds (cdr mappings)))
+			      (cond [(null? fds) pipe]
+				    [else (dup pipe (car fds))
+					  (looprest (cdr fds))]))))))
+	   (domap (lambda (themap pipepair who)
+		    (let* ((dir (car themap))
+			   (parentmap (cadr themap))
+			   (childmap (caddr themap))
+			   (pipe (get-proper-pipe/close-other
+				  pipepair
+				  who
+				  dir)))
+		      (cond
+		       [(and (eq? who 'child)
+			     (null? childmap))
+			(error "null child mapping")]
+		       [(eq? who 'child) (do-dups pipe childmap)]
+		       [(eq? who 'parent) (do-dups pipe parentmap)]
+		       [else
+			(error (format #f "invalid who: ~a" who))]))))
+	   (domaps (lambda (maps pipes who)
+			    (cond
+			     [(null? maps) #nil]
+			     [else
+			      (let ((rest (domaps (cdr maps)
+						  (cdr pipes)
+						  who)))
+				(cons (domap
+				       (car maps)
+				       (car pipes)
+				       who)
+				      rest))])))
+	   (pid (%fork)))
     (cond
      [(zero? pid)
-      ((domaps 'child) pipes maps)]
+      (domaps maps pipes 'child)
+      (thunk)]
      [else
-      ((domaps 'parent) pipes maps)]))
+      (values (domaps maps pipes 'parent) pid)])))
+(export run*)
   
-(define (%open-subprocess thunk
-			  stdin-r/w
-			  stdout-r/w
-			  stderr-r/w)
-  (let ([pid (%fork)])
-    (cond
-     [(not (zero? pid)) ; parent
-      (for-each close-when-port
-		(map cdr (list stderr-r/w stdout-r/w)))
-      (close-when-port (car stdin-r/w))]
-     [else
-      (move->fdes 
-     
-      
-     
 
 
 (define (pipeline-close pipeline)
