@@ -6,6 +6,7 @@
 (use-modules (ice-9 popen)
              (srfi srfi-9)
 	     (srfi srfi-1)
+	     (srfi srfi-8)
              (srfi srfi-9 gnu))
 
 
@@ -464,8 +465,192 @@ descriptors on the child's side (these will be dupped)."
 ;;         for each parent file descriptor after the first (if extant)-
 ;;             dup it to the first.
 ;;     return the list of pipes, and the child pid.
+(define (%port->string input-port)
+  (let loop ((char (read-char input-port)))
+    (cond
+     [(eof-object? char) str]
+     [else (loop (read-char input-port)
+		 (string-append str (string char)))])))
 
+(define (run/strings+* mappings thunk)
+  (receive (mapped pid)
+      (run* mappings thunk)
+    (let ((ports
+	   (filter (lambda (x) x)
+		   (map (lambda (mapping-port fdspec)
+			  (cond
+			   [(eq? (car fdspec) 'write) mapping-port]
+			   [else #f]))
+			mapped
+			mappings))))
+      (apply values (map %port->string port)))))
+
+(define (run/strings* thunk)
+  (receive (mappings pid)
+      (run* '((read () (0)) (write () (1)) (write () (2))) thunk)
+    (let ((out (cadr mappings))
+	  (err (caddr mappings))
+	  (in (car mappings)))
+      (begin
+	(close-output-port in)
+	;; (set-port-encoding! out #f)
+	(let ((content (let loop ((ch (read-char out)) (content ""))
+			 (cond
+			  (ch eof-object? => (lambda (ign) content))
+			  (else
+			   (loop
+			    (read-char out)
+			    (string-append/shared
+			     content
+			     (string ch))))))))
+	  (begin
+	    (wait pid)
+	    content))))))
+(export run/strings*)
+
+;; between the parent and child made by run there are data connections.
+;; these connections are unidirectional. A single connection has all
+;; the same data but this data may be replicated on several file
+;; descriptors. The data may go to or come from any kind of port on
+;; the parent side or also a string.
+;;
+;; '(> 2 #:string)
+;; '(> 2 (/tmp/fileone /tmp/filetwo))
+;; '(> (2) string) ;; send child FD 2 to a string.
+;; '(> (2) /dev/null) ;; send child FD 2 to the file /dev/null.
+;; '(< (0) /dev/null) ;; open /dev/null as child's FD 0.
+;; '(< (0) "hello, world") ;; read the string "hello, world" into FD 0
+;; '(> (2) (4))
+;; '(> (2) (4 5))
+;;
+;; all these really specify a simple structure, a redirect.
+;; a REDIRECT is:
+;; 1. a direction
+;; 2. a list of child-side data sink/source specifications
+;; 3. a list of parent-side data sink/source specifications
+(define-record-type <redirect>
+  (%make-redirect direction child-side-specs parent-side-specs)
+  redirect?
+  redirect-direction
+  redirect-child-side-specs
+  redirect-parent-side-specs)
+;; 
+;; a DIRECTION is:
+;; 1. any literal symbol: <, >, write, read
+;; 
+;; a SINK/SOURCE-SPECIFICATION is:
+;; (cons type value)
+;; where type is a keyword, one of:
+;;  #:string
+;;  #:file
+;;  #:fd
+;; and value is one of:
+;;  a string or
+;;  an integer
+;;  a symbol
+;;
+;; a REDIRECT-SPEC is:
+;; (cons dir body) where dir is a DIRECTION and body is a REDIRECT-BODY
+;;
+;; a REDIRECT BODY IS:
+;; (cons child-redir (cons parent-redir empty))
+;; where child-redir and parent-redir are REDIRECT-ITEMS
+;;
+;; a REDIRECT-ITEM is:
+;; 1. a SINK/SOURCE-SPECIFICATION or
+;; 2. a list-of-sink/source-specifications
+;; 
+;; the function parse-redirect will take a redirect-spec
+;; (by creating a pipe that will have that string written to it).
+;; (> (1 2) 'string) ;; create a pipe between the two processes, move
+;; it to FD 1, dup that to 2, and return in the output values a
+;; string.
+;;
+(define (make-redirect
+	 direction
+	 child-side-specs
+	 parent-side-specs)
+  (case direction
+    ((> < read write)
+     (%make-redirect
+      direction
+      child-side-specs
+      parent-side-specs))
+    (else
+     (error "Bad redirect" direction))))
+
+(define (parse-redirect redirect-spec)
+  (make-redirect
+   (car redirect-spec)
+   (parse-child-sink/sources (cadr redirect-spec))
+   (parse-parent-sink/sources (caddr redirect-spec))))
+
+(define (parse-child-sink/sources child-sink/sources)
+  (cond
+   ((and
+     (not (cons? (cdr child-sink/sources)))
+     (not (null? (cdr child-sink/sources))))
+    (list (child-sink/sources)))
+   (else
+    (
+        
+    
+    
+;; creating a redirection (already forked)
+;; 1. determine the direction
+;; if it is for a file:
+;;  - open the file
+;;  - parent: close it
+;;  - child: remap it to appropriate FD.
+;; if it is for anything else:
+;;  - create a pipe
+;;  - on the parent side, if read: read from the pipe into the string.
+;;  - on the parent side, if write: write from the string into the
+;;  pipe.
+;;  - these will cause blocking.
+;;
+
+(define (run+* maps thunk)
+  (letrec
+      ((perform-read-map
+	(lambda (which mapping)
+	  (case (which)
+	    ((child) (perform-child-read-mapping mapping))
+	    ((parent) (perform-parent-read-mapping mapping))
+	    (else (error "bad which" which)))))
+       (perform-child-read-mapping
+	(lambda (mapping)
+	  (for-each 
+      (perform-maps
+       (lambda (which maps)
+	 (for-each
+	  (lambda (mapping)
+	    (case (car mapping)
+	      ((< read)
+	       (perform-read-map who (cdr mapping)))
+	      ((> write)
+	       (perform-write-map who (cdr mapping)))
+	      (else
+	       (error "bad mapping" mapping)))))))
+      
+  (let ((pid (%fork)))
+    (case pid
+      ((0)
+       (perform-maps
+	'child
+	maps)
+       (thunk)
+       (exit 0))
+      (else
+       (let ((mappings (perform-maps
+			'parent
+			maps)))
+	 (values mappings pid))))))
+
+      
 (define (run* maps thunk)
+  "RUN* : (cons dir (cons (listof integers) (cons (listof sources/sinks)))) thunk -> (values ...)
+RUN* creates a set of mappings from a set of sources or sinks in the parent process to source/sink file descriptors in the child."
   (letrec ((pipes (map (lambda (ignore) (pipe)) maps))
 	   (get-proper-pipe/close-other
 	    (lambda (pipepair who dir)
