@@ -32,6 +32,7 @@
 (export subprocess-stderr)
 (export subprocess-pid)
 (export subprocess?)
+
 (define-immutable-record-type <pipe-procedure>
   (make-pipe-procedure stdout stdin stderr thread)
   pipe-procedure?
@@ -504,7 +505,7 @@ descriptors on the child's side (these will be dupped)."
 			     content
 			     (string ch))))))))
 	  (begin
-	    (wait pid)
+p	    (wait pid)
 	    content))))))
 (export run/strings*)
 
@@ -585,14 +586,6 @@ descriptors on the child's side (these will be dupped)."
    (parse-child-sink/sources (cadr redirect-spec))
    (parse-parent-sink/sources (caddr redirect-spec))))
 
-(define (parse-child-sink/sources child-sink/sources)
-  (cond
-   ((and
-     (not (cons? (cdr child-sink/sources)))
-     (not (null? (cdr child-sink/sources))))
-    (list (child-sink/sources)))
-   (else
-    (
         
     
     
