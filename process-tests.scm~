@@ -1,5 +1,0 @@
-(use-modules (srfi srfi-64)
-	     (custom processes)
-	     (ice-9 regex))
-
-(test-begin "basic forks")

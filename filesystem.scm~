@@ -1,3 +1,0 @@
-;; find : string, string -> list-of-files
-;; find all files starting at rootdir whose name matches pat.
-(define (find rootdir pat)

@@ -1,4 +1,0 @@
-(define-module (custom io))
-
-(define (scan-input-port-for line-regex input-port)
-  (define (find-
