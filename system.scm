@@ -273,6 +273,7 @@ return the pair waitpid returned."
 (define (%fork)
   (flush-all-ports)
   (primitive-fork))
+(export %fork)
 
 (define (fork/pipe thunk)
   "fork/pipe :  thunk -> number
